@@ -8,3 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
+
+__pycache__/
+*.pyc
+.venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+data/raw/
+data/parsed/
+data/verified/
+data/outputs/
+playwright/.cache/
