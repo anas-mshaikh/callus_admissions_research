@@ -6,11 +6,10 @@ from callus_research.models.university import UniversityTarget
 from callus_research.models.verification import VerifyRequest
 from callus_research.services.extract_from_html import extract_from_saved_html
 from callus_research.services.extract_rules import build_placeholder_extraction
+from callus_research.models.llm_retry_request import LLMRetryRequest
+from callus_research.services.llm_field_adjudicator import adjudicate_weak_fields
 from callus_research.services.source_fetcher import fetch_source
 from callus_research.services.verify_fields import verify_extraction
-from callus_research.models.llm_retry_request import LLMRetryRequest
-from callus_research.services.extract_llm import extract_with_llm
-from callus_research.services.merge_llm_retry import merge_llm_result
 
 router = APIRouter()
 
@@ -53,20 +52,19 @@ async def verify_extraction_route(request: VerifyRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/extract/llm-adjudicate")
 @router.post("/extract/llm-retry")
 async def extract_llm_retry_route(request: LLMRetryRequest):
     try:
-        llm_result = extract_with_llm(request.html_request)
-        merged = merge_llm_result(
-            record=request.verified_record,
-            llm_result=llm_result,
-            source_url=request.html_request.source_url,
+        merged, escalations = adjudicate_weak_fields(
+            request.html_request,
+            request.verified_record,
         )
         return {
             "ok": True,
             "data": {
-                "llm_result": llm_result.model_dump(),
                 "merged_record": merged.model_dump(),
+                "field_escalations": [item.model_dump() for item in escalations],
             },
         }
     except Exception as exc:

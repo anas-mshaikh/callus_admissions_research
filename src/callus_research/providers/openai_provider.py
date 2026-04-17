@@ -1,7 +1,6 @@
-import json
 from pathlib import Path
 
-from huggingface_hub import InferenceClient
+from langchain_openai import ChatOpenAI
 
 from callus_research.config import settings
 from callus_research.models.extract_request import ExtractFromHtmlRequest
@@ -14,27 +13,26 @@ from callus_research.providers.base import BaseExtractionProvider
 from callus_research.services.parse_html import html_to_text, read_html
 
 
-class HFInferenceExtractionProvider(BaseExtractionProvider):
+class OpenAIExtractionProvider(BaseExtractionProvider):
     def _load_prompt(self, prompt_name: str) -> str:
         return Path(f"src/callus_research/prompts/{prompt_name}").read_text(encoding="utf-8")
 
-    def _build_client(self) -> InferenceClient:
-        return InferenceClient(
-            provider="auto",
-            api_key=settings.hf_token,
+    def _build_llm(self) -> ChatOpenAI:
+        return ChatOpenAI(
+            model=settings.llm_model or "gpt-4.1",
+            api_key=settings.openai_api_key,
+            temperature=0,
         )
 
     def extract(self, request: ExtractFromHtmlRequest) -> LLMExtractionResult:
         html = read_html(request.saved_path)
         text = html_to_text(html)
 
-        client = self._build_client()
+        llm = self._build_llm()
+        structured_llm = llm.with_structured_output(LLMExtractionResult)
 
-        prompt = f"""
+        message = f"""
 {self._load_prompt("extractor.txt")}
-
-Return valid JSON matching this schema:
-{LLMExtractionResult.model_json_schema()}
 
 University: {request.university_name}
 Country: {request.country}
@@ -42,33 +40,24 @@ Program: {request.program_name}
 Source URL: {request.source_url}
 
 PAGE TEXT:
-{text[:20000]}
+{text[:30000]}
 """
-
-        # Adjust this call shape based on the model family you choose.
-        response = client.text_generation(
-            prompt=prompt,
-            model=settings.hf_model_id,
-            max_new_tokens=1200,
-        )
-
-        return LLMExtractionResult.model_validate(json.loads(response))
+        return structured_llm.invoke(message)
 
     def adjudicate_field(
         self,
         request: ExtractFromHtmlRequest,
         weak_field: WeakFieldSignal,
     ) -> LLMAdjudicationResult:
-        client = self._build_client()
+        llm = self._build_llm()
+        structured_llm = llm.with_structured_output(LLMAdjudicationResult)
+
         snippets = "\n".join(
             f"- {snippet}" for snippet in weak_field.supporting_snippets
         ) or "- No supporting snippets available"
 
-        prompt = f"""
+        message = f"""
 {self._load_prompt("adjudicator.txt")}
-
-Return valid JSON matching this schema:
-{LLMAdjudicationResult.model_json_schema()}
 
 University: {request.university_name}
 Country: {request.country}
@@ -82,11 +71,4 @@ Weakness reason: {weak_field.weakness_reason}
 Supporting snippets:
 {snippets}
 """
-
-        response = client.text_generation(
-            prompt=prompt,
-            model=settings.hf_model_id,
-            max_new_tokens=800,
-        )
-
-        return LLMAdjudicationResult.model_validate(json.loads(response))
+        return structured_llm.invoke(message)

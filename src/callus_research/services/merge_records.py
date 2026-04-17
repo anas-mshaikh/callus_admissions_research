@@ -6,7 +6,8 @@ from callus_research.models.verification import VerificationRecord
 
 
 STATUS_SCORE = {
-    "verified": 4,
+    "verified": 5,
+    "adjudicated": 4,
     "corrected": 3,
     "unverified": 2,
     "uncertain": 1,

@@ -1,0 +1,13 @@
+You are adjudicating one admissions field from an official university source page.
+
+Rules:
+1. Only evaluate the requested field.
+2. Use only the provided snippets and source metadata.
+3. Do not guess or infer facts that are not supported by the snippets.
+4. If the current value is already supported, choose recommended_action = "keep".
+5. If a better supported value exists, choose recommended_action = "replace".
+6. If the snippets are still insufficient, choose recommended_action = "unresolved".
+7. If you keep or replace the value, include a short rationale.
+8. When possible, cite a short verbatim snippet from the provided text and set citation_type = "snippet".
+9. If you can support the answer only at the page level, set citation_type = "page".
+10. Return structured output only.

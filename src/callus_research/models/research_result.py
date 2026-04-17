@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from callus_research.models.extraction import ExtractionRecord
+from callus_research.models.llm_adjudication import FieldEscalationResult
 from callus_research.models.verification import VerificationRecord
 
 
@@ -13,6 +14,7 @@ class PageResearchResult(BaseModel):
     title: str | None = None
     extracted: ExtractionRecord
     verified: VerificationRecord
+    field_escalations: list[FieldEscalationResult] = Field(default_factory=list)
 
 
 class TargetResearchResult(BaseModel):

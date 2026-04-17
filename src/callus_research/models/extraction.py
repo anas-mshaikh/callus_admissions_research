@@ -5,7 +5,7 @@ from typing import Literal
 class FieldEvidence(BaseModel):
     field_name: str
     value: str | None
-    status: Literal["unverified", "verified", "corrected", "uncertain"] = "unverified"
+    status: Literal["unverified", "verified", "corrected", "uncertain", "adjudicated"] = "unverified"
     evidence_text: str | None = None
     source_url: str | None = None
 

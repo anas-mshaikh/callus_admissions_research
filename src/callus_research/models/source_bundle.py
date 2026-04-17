@@ -1,5 +1,6 @@
 from typing import Literal
-from pydantic import BaseModel, HttpUrl
+
+from pydantic import BaseModel, Field, HttpUrl
 
 
 SourceType = Literal[
@@ -23,4 +24,4 @@ class ResearchTarget(BaseModel):
     university_name: str
     country: str
     program_name: str
-    sources: list[SourcePage]
+    sources: list[SourcePage] = Field(min_length=1)

@@ -1,40 +1,26 @@
 import asyncio
-import json
-from pathlib import Path
 
-from callus_research.models.source_bundle import ResearchTarget
-from callus_research.services.export_results import (
-    export_comparison_csv,
-    export_final_records_json,
-    export_target_results_json,
+from callus_research.services.batch_runner import (
+    export_results_bundle,
+    load_targets,
+    run_targets,
 )
-from callus_research.services.research_pipeline import process_research_target
-
-
-INPUT_FILE = Path("data/inputs/universities.json")
-
-
-def load_targets() -> list[ResearchTarget]:
-    raw = json.loads(INPUT_FILE.read_text(encoding="utf-8"))
-    return [ResearchTarget.model_validate(item) for item in raw]
 
 
 async def main():
     targets = load_targets()
-    results = []
+    results = await run_targets(
+        targets,
+        progress_callback=lambda _, __, target: print(
+            f"Processing: {target.university_name} | {target.program_name}"
+        ),
+    )
 
-    for target in targets:
-        print(f"Processing: {target.university_name} | {target.program_name}")
-        result = await process_research_target(target)
-        results.append(result)
+    export_paths = export_results_bundle(results)
 
-    target_json = export_target_results_json(results)
-    final_json = export_final_records_json(results)
-    csv_path = export_comparison_csv(results)
-
-    print(f"Saved target results: {target_json}")
-    print(f"Saved final records: {final_json}")
-    print(f"Saved comparison CSV: {csv_path}")
+    print(f"Saved target results: {export_paths['target_results']}")
+    print(f"Saved final records: {export_paths['final_records']}")
+    print(f"Saved comparison CSV: {export_paths['comparison_csv']}")
 
 
 if __name__ == "__main__":

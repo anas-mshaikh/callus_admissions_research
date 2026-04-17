@@ -5,25 +5,12 @@ from callus_research.models.research_result import (
     TargetResearchResult,
 )
 from callus_research.models.source_bundle import ResearchTarget, SourcePage
-from callus_research.models.verification import VerificationRecord, VerifyRequest
+from callus_research.models.verification import VerifyRequest
 from callus_research.services.extract_from_html import extract_from_saved_html
-from callus_research.services.extract_llm import extract_with_llm
-from callus_research.services.merge_llm_retry import merge_llm_result
+from callus_research.services.llm_field_adjudicator import adjudicate_weak_fields
 from callus_research.services.merge_records import merge_verification_records
 from callus_research.services.source_fetcher import fetch_source
 from callus_research.services.verify_fields import verify_extraction
-
-
-def record_needs_llm_retry(record: VerificationRecord) -> bool:
-    return any(
-        field.status == "uncertain"
-        for field in [
-            record.application_deadline,
-            record.english_proficiency,
-            record.application_fee,
-            record.notable_requirement,
-        ]
-    )
 
 
 async def process_source_page(
@@ -54,14 +41,7 @@ async def process_source_page(
             saved_path=fetch_result.saved_path,
         )
     )
-
-    if record_needs_llm_retry(verified):
-        llm_result = extract_with_llm(extract_request)
-        verified = merge_llm_result(
-            record=verified,
-            llm_result=llm_result,
-            source_url=str(source.url),
-        )
+    verified, field_escalations = adjudicate_weak_fields(extract_request, verified)
 
     return PageResearchResult(
         source_url=str(source.url),
@@ -72,10 +52,16 @@ async def process_source_page(
         title=fetch_result.title,
         extracted=extracted,
         verified=verified,
+        field_escalations=field_escalations,
     )
 
 
 async def process_research_target(target: ResearchTarget) -> TargetResearchResult:
+    if not target.sources:
+        raise ValueError(
+            f"No sources configured for {target.university_name} | {target.program_name}"
+        )
+
     page_results: list[PageResearchResult] = []
 
     for source in target.sources:
