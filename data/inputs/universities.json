@@ -1,0 +1,31 @@
+[
+  {
+    "university_name": "Stanford University",
+    "country": "US",
+    "program_name": "MS Computer Science",
+    "sources": [
+      {
+        "url": "https://www.cs.stanford.edu/admissions/graduate-application-checklists",
+        "source_type": "application_checklist",
+        "mode": "auto"
+      },
+      {
+        "url": "https://www.cs.stanford.edu/admissions-graduate-application-deadlines",
+        "source_type": "deadline_page",
+        "mode": "auto"
+      }
+    ]
+  },
+  {
+    "university_name": "Massachusetts Institute of Technology",
+    "country": "US",
+    "program_name": "EECS PhD",
+    "sources": [
+      {
+        "url": "https://www.eecs.mit.edu/academics/graduate-programs/admission-process/",
+        "source_type": "admissions_page",
+        "mode": "auto"
+      }
+    ]
+  }
+]
