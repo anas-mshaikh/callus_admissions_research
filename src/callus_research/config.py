@@ -15,6 +15,8 @@ class Settings(BaseSettings):
 
     llm_provider: str = "openai"  # openai | gemini | hf_inference | hf_space
     llm_model: str = "gpt-4.1"
+    discovery_provider: str = "adk_google_search"
+    discovery_model: str = "gemini-2.0-flash"
 
     openai_api_key: str | None = None
     google_api_key: str | None = None
@@ -24,11 +26,19 @@ class Settings(BaseSettings):
     hf_space_id: str | None = None
     hf_space_api_name: str = "/predict"
 
+    source_discovery_prompt_path: Path = Path(
+        "src/callus_research/prompts/source_discovery.txt"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def source_discovery_prompt(self) -> str:
+        return self.source_discovery_prompt_path.read_text(encoding="utf-8")
 
 
 settings = Settings()

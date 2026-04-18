@@ -11,8 +11,8 @@ async def main():
     targets = load_targets()
     results = await run_targets(
         targets,
-        progress_callback=lambda _, __, target: print(
-            f"Processing: {target.university_name} | {target.program_name}"
+        progress_callback=lambda stage, _, __, target: print(
+            f"{stage.title()}: {target.university_name} | {target.program_name}"
         ),
     )
 

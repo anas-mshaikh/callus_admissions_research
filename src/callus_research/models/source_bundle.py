@@ -25,3 +25,10 @@ class ResearchTarget(BaseModel):
     country: str
     program_name: str
     sources: list[SourcePage] = Field(min_length=1)
+
+
+class ResearchIntent(BaseModel):
+    university_name: str
+    country: str
+    program_name: str
+    degree_type: str

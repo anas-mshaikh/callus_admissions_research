@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from callus_research.config import settings
 from callus_research.models.research_result import TargetResearchResult
-from callus_research.models.source_bundle import ResearchTarget
+from callus_research.models.source_bundle import ResearchIntent
 from callus_research.services.batch_runner import (
     DEFAULT_INPUT_FILE,
     export_results_bundle,
@@ -24,23 +24,7 @@ from callus_research.services.batch_runner import (
     serialize_targets,
 )
 
-SOURCE_TYPES = [
-    "program_page",
-    "application_checklist",
-    "deadline_page",
-    "english_requirements_page",
-    "fee_page",
-    "admissions_page",
-    "other",
-]
-FETCH_MODES = ["auto", "http", "browser"]
-DEFAULT_SOURCE_ROWS = [
-    {
-        "url": "",
-        "source_type": "admissions_page",
-        "mode": "auto",
-    }
-]
+DEGREE_TYPES = ["Master's", "PhD", "Bachelor's", "MPhil", "Other"]
 
 
 def load_input_text() -> str:
@@ -49,50 +33,18 @@ def load_input_text() -> str:
     return "[]"
 
 
-def normalise_rows(rows: Any) -> list[dict[str, Any]]:
-    if rows is None:
-        return []
-    if hasattr(rows, "to_dict"):
-        return rows.to_dict(orient="records")
-    if isinstance(rows, list):
-        return rows
-    if isinstance(rows, dict):
-        keys = list(rows.keys())
-        if not keys:
-            return []
-        row_count = len(rows[keys[0]])
-        return [
-            {key: rows[key][index] for key in keys}
-            for index in range(row_count)
-        ]
-    return list(rows)
-
-
 def build_target_from_form(
     university_name: str,
     country: str,
     program_name: str,
-    source_rows: list[dict[str, Any]],
-) -> ResearchTarget:
-    cleaned_sources = []
-    for row in source_rows:
-        url = str(row.get("url", "")).strip()
-        if not url:
-            continue
-        cleaned_sources.append(
-            {
-                "url": url,
-                "source_type": row.get("source_type") or "other",
-                "mode": row.get("mode") or "auto",
-            }
-        )
-
-    return ResearchTarget.model_validate(
+    degree_type: str,
+) -> ResearchIntent:
+    return ResearchIntent.model_validate(
         {
             "university_name": university_name.strip(),
             "country": country.strip(),
             "program_name": program_name.strip(),
-            "sources": cleaned_sources,
+            "degree_type": degree_type.strip(),
         }
     )
 
@@ -154,6 +106,125 @@ def escalation_to_rows(field_escalations: list[Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def source_discovery_rows(results: list[TargetResearchResult]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        if not result.source_discovery:
+            continue
+        for candidate in result.source_discovery.candidates:
+            rows.append(
+                {
+                    "university_name": result.university_name,
+                    "program_name": result.program_name,
+                    "degree_type": result.degree_type,
+                    "source_type": candidate.source_type,
+                    "query": candidate.query,
+                    "url": candidate.url,
+                    "title": candidate.title,
+                    "selected": candidate.selected,
+                    "is_official": candidate.is_official,
+                    "confidence": candidate.confidence,
+                    "reason": candidate.reason,
+                    "rejection_reason": candidate.rejection_reason,
+                }
+            )
+    return rows
+
+
+def final_comparison_rows(results: list[TargetResearchResult]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    fields = [
+        "application_deadline",
+        "english_proficiency",
+        "application_fee",
+        "notable_requirement",
+    ]
+    for result in results:
+        for field_name in fields:
+            final_field = getattr(result.final_record, field_name)
+            rows.append(
+                {
+                    "university_name": result.university_name,
+                    "program_name": result.program_name,
+                    "degree_type": result.degree_type,
+                    "field_name": field_name,
+                    "final_value": final_field.value,
+                    "final_status": final_field.status,
+                    "source_url": final_field.source_url,
+                    "evidence_text": final_field.evidence_text,
+                }
+            )
+    return rows
+
+
+def ai_vs_verified_rows(results: list[TargetResearchResult]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    fields = [
+        "application_deadline",
+        "english_proficiency",
+        "application_fee",
+        "notable_requirement",
+    ]
+    for result in results:
+        for field_name in fields:
+            generated_value = None
+            generated_status = None
+            generated_source_url = None
+            for page_result in result.page_results:
+                extracted_field = getattr(page_result.extracted, field_name)
+                if extracted_field.value:
+                    generated_value = extracted_field.value
+                    generated_status = extracted_field.status
+                    generated_source_url = page_result.source_url
+                    break
+
+            final_field = getattr(result.final_record, field_name)
+            rows.append(
+                {
+                    "university_name": result.university_name,
+                    "program_name": result.program_name,
+                    "degree_type": result.degree_type,
+                    "field_name": field_name,
+                    "generated_value": generated_value,
+                    "generated_status": generated_status,
+                    "generated_source_url": generated_source_url,
+                    "verified_value": final_field.value,
+                    "verified_status": final_field.status,
+                    "verified_source_url": final_field.source_url,
+                }
+            )
+    return rows
+
+
+def correction_rows(results: list[TargetResearchResult]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        for page_result in result.page_results:
+            for escalation in page_result.field_escalations:
+                adjudication = escalation.adjudication
+                rows.append(
+                    {
+                        "university_name": result.university_name,
+                        "program_name": result.program_name,
+                        "degree_type": result.degree_type,
+                        "field_name": escalation.field_name,
+                        "source_url": page_result.source_url,
+                        "initial_value": escalation.current_value,
+                        "initial_status": escalation.current_status,
+                        "weakness_reason": escalation.weakness_reason,
+                        "final_value": escalation.final_value,
+                        "final_status": escalation.final_status,
+                        "resolved": escalation.resolved,
+                        "llm_action": adjudication.recommended_action
+                        if adjudication
+                        else None,
+                        "citation": adjudication.citation if adjudication else None,
+                        "rationale": adjudication.rationale if adjudication else None,
+                    }
+                )
+    return rows
+
+
 def summarise_results(results: list[TargetResearchResult]) -> tuple[int, int, int]:
     total_pages = sum(len(result.page_results) for result in results)
     corrected_or_verified = 0
@@ -172,12 +243,14 @@ def run_and_store_results(targets: list[ResearchTarget]) -> None:
     status = st.empty()
     total = max(len(targets), 1)
 
-    def on_progress(index: int, count: int, target: ResearchTarget) -> None:
+    def on_progress(stage: str, index: int, count: int, target: Any) -> None:
         progress.progress(
             min(index / count, 1.0),
-            text=f"Processing {index}/{count}: {target.university_name}",
+            text=f"{stage.title()} {index}/{count}: {target.university_name}",
         )
-        status.caption(f"{target.program_name} | {target.country}")
+        detail = getattr(target, "degree_type", None)
+        suffix = f" | {detail}" if detail else ""
+        status.caption(f"{target.program_name} | {target.country}{suffix}")
 
     results = run_targets_sync(targets, progress_callback=on_progress)
     export_paths = export_results_bundle(results)
@@ -198,41 +271,97 @@ def render_results(results: list[TargetResearchResult]) -> None:
     if uncertain_fields:
         st.warning(f"{uncertain_fields} final fields are still marked uncertain.")
 
-    for result in results:
-        with st.container(border=True):
-            st.subheader(f"{result.university_name} | {result.program_name}")
-            st.caption(f"{result.country} | {len(result.page_results)} source pages")
-            st.dataframe(record_to_rows(result.final_record), use_container_width=True)
+    workflow_tab, discovery_tab, comparison_tab, ai_tab, corrections_tab, scale_tab = (
+        st.tabs(
+            [
+                "Workflow",
+                "Source Discovery",
+                "Final Comparison",
+                "AI vs Verified",
+                "Corrections",
+                "Scaling Note",
+            ]
+        )
+    )
 
-            for page_index, page_result in enumerate(result.page_results, start=1):
-                with st.expander(
-                    f"Source {page_index}: {page_result.source_type} | {page_result.fetch_mode}"
-                ):
-                    st.write(
-                        {
-                            "source_url": page_result.source_url,
-                            "saved_path": page_result.saved_path,
-                            "title": page_result.title,
-                            "content_length": page_result.content_length,
-                        }
-                    )
-                    page_tabs = st.tabs(["Verified", "Extracted"])
-                    with page_tabs[0]:
-                        st.dataframe(
-                            record_to_rows(page_result.verified),
-                            use_container_width=True,
+    with workflow_tab:
+        st.markdown(
+            """
+            Input intent -> ADK Google Search discovery -> official URL selection -> fetch ->
+            extract -> verify -> targeted LLM adjudication -> merge -> export
+            """
+        )
+        for result in results:
+            with st.container(border=True):
+                st.subheader(f"{result.university_name} | {result.program_name}")
+                st.caption(
+                    f"{result.country} | {result.degree_type or 'Degree unspecified'} | "
+                    f"{len(result.page_results)} source pages"
+                )
+                st.dataframe(record_to_rows(result.final_record), use_container_width=True)
+                for page_index, page_result in enumerate(result.page_results, start=1):
+                    with st.expander(
+                        f"Source {page_index}: {page_result.source_type} | {page_result.fetch_mode}"
+                    ):
+                        st.write(
+                            {
+                                "source_url": page_result.source_url,
+                                "saved_path": page_result.saved_path,
+                                "title": page_result.title,
+                                "content_length": page_result.content_length,
+                            }
                         )
-                    with page_tabs[1]:
-                        st.dataframe(
-                            record_to_rows(page_result.extracted),
-                            use_container_width=True,
-                        )
-                    if page_result.field_escalations:
-                        st.markdown("Escalations")
-                        st.dataframe(
-                            escalation_to_rows(page_result.field_escalations),
-                            use_container_width=True,
-                        )
+                        page_tabs = st.tabs(["Verified", "Extracted", "Escalations"])
+                        with page_tabs[0]:
+                            st.dataframe(
+                                record_to_rows(page_result.verified),
+                                use_container_width=True,
+                            )
+                        with page_tabs[1]:
+                            st.dataframe(
+                                record_to_rows(page_result.extracted),
+                                use_container_width=True,
+                            )
+                        with page_tabs[2]:
+                            if page_result.field_escalations:
+                                st.dataframe(
+                                    escalation_to_rows(page_result.field_escalations),
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.caption("No adjudication was needed for this source page.")
+
+    with discovery_tab:
+        rows = source_discovery_rows(results)
+        if rows:
+            st.dataframe(rows, use_container_width=True)
+        else:
+            st.info("No source discovery trace was captured for these results.")
+
+    with comparison_tab:
+        st.dataframe(final_comparison_rows(results), use_container_width=True)
+
+    with ai_tab:
+        st.dataframe(ai_vs_verified_rows(results), use_container_width=True)
+
+    with corrections_tab:
+        rows = correction_rows(results)
+        if rows:
+            st.dataframe(rows, use_container_width=True)
+        else:
+            st.info("No correction cases were logged for these results.")
+
+    with scale_tab:
+        st.markdown(
+            """
+            This workflow is structured as a reusable research operator pipeline:
+
+            - discovery is isolated behind a provider boundary
+            - official pages are stored and used as source of truth
+            - weak fields are adjudicated instead of silently accepted
+            - exports capture discovery, comparison, and correction artifacts for reuse
+            """
+        )
 
 
 def init_page() -> None:
@@ -287,6 +416,8 @@ def main() -> None:
             {
                 "llm_provider": settings.llm_provider,
                 "llm_model": settings.llm_model,
+                "discovery_provider": settings.discovery_provider,
+                "discovery_model": settings.discovery_model,
                 "default_timeout": settings.default_timeout,
                 "input_file": str(DEFAULT_INPUT_FILE),
             }
@@ -315,37 +446,28 @@ def main() -> None:
                     "Program name",
                     placeholder="MS Computer Science",
                 )
+                degree_type = st.selectbox("Degree type", DEGREE_TYPES, index=0)
             with right:
-                source_rows = st.data_editor(
-                    DEFAULT_SOURCE_ROWS,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "url": st.column_config.TextColumn("Source URL", required=True),
-                        "source_type": st.column_config.SelectboxColumn(
-                            "Source type",
-                            options=SOURCE_TYPES,
-                            required=True,
-                        ),
-                        "mode": st.column_config.SelectboxColumn(
-                            "Fetch mode",
-                            options=FETCH_MODES,
-                            required=True,
-                        ),
-                    },
-                    key="single_target_sources_editor",
+                st.markdown(
+                    """
+                    The app will automatically discover and rank official source pages for:
+
+                    - program page
+                    - admissions requirements
+                    - English requirements
+                    - application fee
+                    """
                 )
 
             action_a, action_b = st.columns([0.6, 0.4])
             with action_a:
-                if st.button("Run single target", type="primary", use_container_width=True):
+                if st.button("Run workflow", type="primary", use_container_width=True):
                     try:
                         target = build_target_from_form(
                             university_name,
                             country,
                             program_name,
-                            normalise_rows(source_rows),
+                            degree_type,
                         )
                         run_and_store_results([target])
                     except ValidationError as exc:
@@ -359,7 +481,7 @@ def main() -> None:
                             university_name,
                             country,
                             program_name,
-                            normalise_rows(source_rows),
+                            degree_type,
                         )
                         current_targets = parse_targets_json(st.session_state["batch_json"])
                         current_targets.append(target)
@@ -417,6 +539,9 @@ def main() -> None:
             target_results_path = export_paths.get("target_results")
             final_records_path = export_paths.get("final_records")
             comparison_csv_path = export_paths.get("comparison_csv")
+            ai_vs_verified_path = export_paths.get("ai_vs_verified")
+            correction_log_path = export_paths.get("correction_log")
+            source_discovery_path = export_paths.get("source_discovery")
             if target_results_path:
                 export_columns[0].download_button(
                     "Download target results JSON",
@@ -438,6 +563,32 @@ def main() -> None:
                     "Download comparison CSV",
                     data=Path(comparison_csv_path).read_text(encoding="utf-8"),
                     file_name=Path(comparison_csv_path).name,
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+            extra_export_columns = st.columns(3)
+            if source_discovery_path:
+                extra_export_columns[0].download_button(
+                    "Download source discovery JSON",
+                    data=Path(source_discovery_path).read_text(encoding="utf-8"),
+                    file_name=Path(source_discovery_path).name,
+                    mime="application/json",
+                    use_container_width=True,
+                )
+            if ai_vs_verified_path:
+                extra_export_columns[1].download_button(
+                    "Download AI vs verified CSV",
+                    data=Path(ai_vs_verified_path).read_text(encoding="utf-8"),
+                    file_name=Path(ai_vs_verified_path).name,
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            if correction_log_path:
+                extra_export_columns[2].download_button(
+                    "Download correction log CSV",
+                    data=Path(correction_log_path).read_text(encoding="utf-8"),
+                    file_name=Path(correction_log_path).name,
                     mime="text/csv",
                     use_container_width=True,
                 )

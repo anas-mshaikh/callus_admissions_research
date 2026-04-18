@@ -2,30 +2,25 @@
   {
     "university_name": "Stanford University",
     "country": "US",
-    "program_name": "MS Computer Science",
-    "sources": [
-      {
-        "url": "https://www.cs.stanford.edu/admissions/graduate-application-checklists",
-        "source_type": "application_checklist",
-        "mode": "auto"
-      },
-      {
-        "url": "https://www.cs.stanford.edu/admissions-graduate-application-deadlines",
-        "source_type": "deadline_page",
-        "mode": "auto"
-      }
-    ]
+    "program_name": "Computer Science",
+    "degree_type": "Master's"
   },
   {
     "university_name": "Massachusetts Institute of Technology",
     "country": "US",
-    "program_name": "EECS PhD",
-    "sources": [
-      {
-        "url": "https://www.eecs.mit.edu/academics/graduate-programs/admission-process/",
-        "source_type": "admissions_page",
-        "mode": "auto"
-      }
-    ]
+    "program_name": "EECS",
+    "degree_type": "PhD"
+  },
+  {
+    "university_name": "University of Oxford",
+    "country": "UK",
+    "program_name": "Advanced Computer Science",
+    "degree_type": "Master's"
+  },
+  {
+    "university_name": "University of Cambridge",
+    "country": "UK",
+    "program_name": "Advanced Computer Science",
+    "degree_type": "MPhil"
   }
 ]

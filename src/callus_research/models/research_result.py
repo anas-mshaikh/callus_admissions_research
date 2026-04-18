@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 
 from callus_research.models.extraction import ExtractionRecord
 from callus_research.models.llm_adjudication import FieldEscalationResult
+from callus_research.models.source_discovery import SourceDiscoveryResult
 from callus_research.models.verification import VerificationRecord
 
 
@@ -21,5 +22,7 @@ class TargetResearchResult(BaseModel):
     university_name: str
     country: str
     program_name: str
+    degree_type: str | None = None
     page_results: list[PageResearchResult]
     final_record: VerificationRecord
+    source_discovery: SourceDiscoveryResult | None = None

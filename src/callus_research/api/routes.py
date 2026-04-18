@@ -2,12 +2,15 @@ from fastapi import APIRouter, HTTPException
 
 from callus_research.models.extract_request import ExtractFromHtmlRequest
 from callus_research.models.fetch import FetchRequest
+from callus_research.models.source_bundle import ResearchIntent
 from callus_research.models.university import UniversityTarget
 from callus_research.models.verification import VerifyRequest
 from callus_research.services.extract_from_html import extract_from_saved_html
 from callus_research.services.extract_rules import build_placeholder_extraction
 from callus_research.models.llm_retry_request import LLMRetryRequest
 from callus_research.services.llm_field_adjudicator import adjudicate_weak_fields
+from callus_research.services.research_workflow import process_research_input
+from callus_research.services.source_discovery import discover_sources
 from callus_research.services.source_fetcher import fetch_source
 from callus_research.services.verify_fields import verify_extraction
 
@@ -29,6 +32,24 @@ async def extract_placeholder(target: UniversityTarget):
 async def fetch_source_route(request: FetchRequest):
     try:
         result = await fetch_source(request)
+        return {"ok": True, "data": result.model_dump()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/discover/sources")
+async def discover_sources_route(intent: ResearchIntent):
+    try:
+        result = await discover_sources(intent)
+        return {"ok": True, "data": result.model_dump()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/research/run")
+async def research_run_route(intent: ResearchIntent):
+    try:
+        result = await process_research_input(intent)
         return {"ok": True, "data": result.model_dump()}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
