@@ -20,6 +20,13 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     google_api_key: str | None = None
+    google_search_api_key: str | None = None
+    google_search_engine_id: str | None = None
+    vertex_search_project_id: str | None = None
+    vertex_search_location: str = "global"
+    vertex_search_data_store_id: str | None = None
+    vertex_search_serving_config_id: str = "default_config"
+    vertex_search_credentials_path: str | None = None
     hf_token: str | None = None
 
     hf_model_id: str | None = None

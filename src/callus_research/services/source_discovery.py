@@ -164,7 +164,12 @@ async def discover_sources(intent: ResearchIntent) -> SourceDiscoveryResult:
 
     candidates: list[DiscoveredSourceCandidate] = []
     for source_type, query in zip(PRIORITY_SOURCE_TYPES, search_queries):
-        results = await provider.discover_candidates(intent, source_type, query)
+        try:
+            results = await provider.discover_candidates(intent, source_type, query)
+        except Exception as exc:
+            raise ValueError(
+                f"Source discovery failed for {source_type} using query '{query}'. {exc}"
+            ) from exc
         if not results:
             continue
 

@@ -17,18 +17,55 @@ from callus_research.models.source_discovery import DiscoveredSourceCandidate
 from callus_research.providers.discovery_base import BaseDiscoveryProvider
 
 
-def extract_json_object(raw_text: str) -> dict:
+def clean_response_text(raw_text: str) -> str:
     cleaned = raw_text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\n", "", cleaned)
         cleaned = re.sub(r"\n```$", "", cleaned)
+    return cleaned
+
+
+def extract_candidate_payload(raw_text: str) -> dict:
+    cleaned = clean_response_text(raw_text)
+
+    if not cleaned:
+        raise ValueError("Discovery provider returned an empty response.")
+
+    if cleaned.startswith("["):
+        return {"candidates": json.loads(cleaned)}
+
+    if cleaned.startswith("{"):
+        return json.loads(cleaned)
 
     start = cleaned.find("{")
     end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("Discovery response did not contain a JSON object.")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(cleaned[start : end + 1])
 
-    return json.loads(cleaned[start : end + 1])
+    array_start = cleaned.find("[")
+    array_end = cleaned.rfind("]")
+    if array_start != -1 and array_end != -1 and array_end > array_start:
+        return {"candidates": json.loads(cleaned[array_start : array_end + 1])}
+
+    url_matches = re.findall(r"https?://[^\s)\]>\"']+", cleaned)
+    if url_matches:
+        candidates = []
+        for url in dict.fromkeys(url_matches):
+            candidates.append(
+                {
+                    "url": url,
+                    "title": None,
+                    "reason": "Recovered from non-JSON discovery output.",
+                    "confidence": 0.3,
+                }
+            )
+        return {"candidates": candidates}
+
+    preview = cleaned[:300]
+    raise ValueError(
+        "Discovery provider returned an unparsable response. "
+        f"Response preview: {preview}"
+    )
 
 
 class AdkGoogleSearchDiscoveryProvider(BaseDiscoveryProvider):
@@ -114,7 +151,7 @@ Return a JSON object with this shape:
                     part.text or "" for part in event.content.parts
                 )
 
-        payload = extract_json_object(final_response)
+        payload = extract_candidate_payload(final_response)
         candidates = payload.get("candidates", [])
 
         return [

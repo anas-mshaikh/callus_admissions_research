@@ -15,6 +15,9 @@ from callus_research.services.parse_html import html_to_text, read_html
 
 
 class HFInferenceExtractionProvider(BaseExtractionProvider):
+    def _model_name(self) -> str | None:
+        return settings.hf_model_id or settings.llm_model
+
     def _load_prompt(self, prompt_name: str) -> str:
         return Path(f"src/callus_research/prompts/{prompt_name}").read_text(encoding="utf-8")
 
@@ -48,7 +51,7 @@ PAGE TEXT:
         # Adjust this call shape based on the model family you choose.
         response = client.text_generation(
             prompt=prompt,
-            model=settings.hf_model_id,
+            model=self._model_name(),
             max_new_tokens=1200,
         )
 
@@ -85,7 +88,7 @@ Supporting snippets:
 
         response = client.text_generation(
             prompt=prompt,
-            model=settings.hf_model_id,
+            model=self._model_name(),
             max_new_tokens=800,
         )
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,20 +16,47 @@ from callus_research.config import settings
 from callus_research.models.research_result import TargetResearchResult
 from callus_research.models.source_bundle import ResearchIntent
 from callus_research.services.batch_runner import (
-    DEFAULT_INPUT_FILE,
     export_results_bundle,
-    parse_targets_json,
     run_targets_sync,
-    serialize_targets,
 )
 
 DEGREE_TYPES = ["Master's", "PhD", "Bachelor's", "MPhil", "Other"]
+LLM_PROVIDERS = ["openai", "gemini", "hf_inference"]
+DISCOVERY_PROVIDERS = [
+    "adk_google_search",
+    "google_custom_search",
+    "vertex_ai_search",
+]
 
 
-def load_input_text() -> str:
-    if DEFAULT_INPUT_FILE.exists():
-        return DEFAULT_INPUT_FILE.read_text(encoding="utf-8")
-    return "[]"
+def apply_runtime_settings() -> None:
+    settings.llm_provider = st.session_state["ui_llm_provider"]
+    settings.llm_model = st.session_state["ui_llm_model"].strip()
+    settings.discovery_provider = st.session_state["ui_discovery_provider"]
+    settings.discovery_model = st.session_state["ui_discovery_model"].strip()
+    google_search_api_key = st.session_state["ui_google_search_api_key"].strip()
+    google_search_engine_id = st.session_state["ui_google_search_engine_id"].strip()
+    vertex_search_project_id = st.session_state["ui_vertex_search_project_id"].strip()
+    vertex_search_location = st.session_state["ui_vertex_search_location"].strip()
+    vertex_search_data_store_id = st.session_state["ui_vertex_search_data_store_id"].strip()
+    vertex_search_serving_config_id = st.session_state[
+        "ui_vertex_search_serving_config_id"
+    ].strip()
+    vertex_search_credentials_path = st.session_state[
+        "ui_vertex_search_credentials_path"
+    ].strip()
+    hf_token = st.session_state["ui_hf_token"].strip()
+    settings.hf_model_id = settings.llm_model or None
+    settings.hf_token = hf_token or None
+    settings.google_search_api_key = google_search_api_key or None
+    settings.google_search_engine_id = google_search_engine_id or None
+    settings.vertex_search_project_id = vertex_search_project_id or None
+    settings.vertex_search_location = vertex_search_location or "global"
+    settings.vertex_search_data_store_id = vertex_search_data_store_id or None
+    settings.vertex_search_serving_config_id = (
+        vertex_search_serving_config_id or "default_config"
+    )
+    settings.vertex_search_credentials_path = vertex_search_credentials_path or None
 
 
 def build_target_from_form(
@@ -238,7 +264,8 @@ def summarise_results(results: list[TargetResearchResult]) -> tuple[int, int, in
     return total_pages, corrected_or_verified, uncertain
 
 
-def run_and_store_results(targets: list[ResearchTarget]) -> None:
+def run_and_store_results(targets: list[Any]) -> None:
+    apply_runtime_settings()
     progress = st.progress(0.0, text="Preparing pipeline run")
     status = st.empty()
     total = max(len(targets), 1)
@@ -398,12 +425,46 @@ def init_page() -> None:
 def main() -> None:
     init_page()
 
-    if "batch_json" not in st.session_state:
-        st.session_state["batch_json"] = load_input_text()
     if "results" not in st.session_state:
         st.session_state["results"] = []
     if "export_paths" not in st.session_state:
         st.session_state["export_paths"] = {}
+    if "ui_llm_provider" not in st.session_state:
+        st.session_state["ui_llm_provider"] = settings.llm_provider
+    if "ui_llm_model" not in st.session_state:
+        st.session_state["ui_llm_model"] = settings.llm_model
+    if "ui_discovery_provider" not in st.session_state:
+        st.session_state["ui_discovery_provider"] = settings.discovery_provider
+    if "ui_discovery_model" not in st.session_state:
+        st.session_state["ui_discovery_model"] = settings.discovery_model
+    if "ui_hf_token" not in st.session_state:
+        st.session_state["ui_hf_token"] = settings.hf_token or ""
+    if "ui_google_search_api_key" not in st.session_state:
+        st.session_state["ui_google_search_api_key"] = ""
+    if "ui_google_search_engine_id" not in st.session_state:
+        st.session_state["ui_google_search_engine_id"] = (
+            settings.google_search_engine_id or ""
+        )
+    if "ui_vertex_search_project_id" not in st.session_state:
+        st.session_state["ui_vertex_search_project_id"] = (
+            settings.vertex_search_project_id or ""
+        )
+    if "ui_vertex_search_location" not in st.session_state:
+        st.session_state["ui_vertex_search_location"] = (
+            settings.vertex_search_location or "global"
+        )
+    if "ui_vertex_search_data_store_id" not in st.session_state:
+        st.session_state["ui_vertex_search_data_store_id"] = (
+            settings.vertex_search_data_store_id or ""
+        )
+    if "ui_vertex_search_serving_config_id" not in st.session_state:
+        st.session_state["ui_vertex_search_serving_config_id"] = (
+            settings.vertex_search_serving_config_id or "default_config"
+        )
+    if "ui_vertex_search_credentials_path" not in st.session_state:
+        st.session_state["ui_vertex_search_credentials_path"] = (
+            settings.vertex_search_credentials_path or ""
+        )
 
     st.title("Callus Admissions Research")
     st.caption(
@@ -412,122 +473,118 @@ def main() -> None:
 
     with st.sidebar:
         st.subheader("Runtime")
-        st.write(
-            {
-                "llm_provider": settings.llm_provider,
-                "llm_model": settings.llm_model,
-                "discovery_provider": settings.discovery_provider,
-                "discovery_model": settings.discovery_model,
-                "default_timeout": settings.default_timeout,
-                "input_file": str(DEFAULT_INPUT_FILE),
-            }
+        st.selectbox(
+            "LLM provider",
+            options=LLM_PROVIDERS,
+            key="ui_llm_provider",
         )
-        if st.button("Reload input file", use_container_width=True):
-            st.session_state["batch_json"] = load_input_text()
-            st.rerun()
+        st.text_input(
+            "LLM model",
+            key="ui_llm_model",
+            help="Used by the selected LLM provider, including Hugging Face inference.",
+        )
+        if st.session_state["ui_llm_provider"] == "hf_inference":
+            st.text_input(
+                "HF token",
+                key="ui_hf_token",
+                type="password",
+                help="Optional runtime override for HF_TOKEN.",
+            )
+        st.selectbox(
+            "Discovery provider",
+            options=DISCOVERY_PROVIDERS,
+            key="ui_discovery_provider",
+        )
+        if st.session_state["ui_discovery_provider"] == "adk_google_search":
+            st.text_input(
+                "Discovery model",
+                key="ui_discovery_model",
+                help="Used by the ADK Google Search discovery agent.",
+            )
+        elif st.session_state["ui_discovery_provider"] == "google_custom_search":
+            st.text_input(
+                "Search engine ID",
+                key="ui_google_search_engine_id",
+                help="Programmable Search Engine ID (cx) for Google Custom Search.",
+            )
+            st.text_input(
+                "Search API key",
+                key="ui_google_search_api_key",
+                type="password",
+                help="Optional override for GOOGLE_SEARCH_API_KEY.",
+            )
+        else:
+            st.text_input(
+                "Vertex project ID",
+                key="ui_vertex_search_project_id",
+                help="Google Cloud project that owns the Vertex AI Search data store.",
+            )
+            st.text_input(
+                "Vertex location",
+                key="ui_vertex_search_location",
+                help="Usually global, us, or eu.",
+            )
+            st.text_input(
+                "Data store ID",
+                key="ui_vertex_search_data_store_id",
+                help="Vertex AI Search data store ID from the console.",
+            )
+            st.text_input(
+                "Serving config ID",
+                key="ui_vertex_search_serving_config_id",
+                help="Usually default_config.",
+            )
+            st.text_input(
+                "Service account JSON path",
+                key="ui_vertex_search_credentials_path",
+                help="Optional local path. Leave blank to use ADC credentials.",
+            )
+        apply_runtime_settings()
+        st.caption("Runtime settings apply to the next workflow run.")
 
     input_tab, review_tab = st.tabs(["Configure & Run", "Results"])
 
     with input_tab:
         st.markdown(
-            "Use the single-target form for quick runs or edit the batch JSON to process multiple universities."
+            "Run a single research workflow from a program-specific intent."
         )
-        single_tab, batch_tab = st.tabs(["Single Target", "Batch JSON"])
+        left, right = st.columns([0.9, 1.1])
+        with left:
+            university_name = st.text_input(
+                "University name",
+                placeholder="Stanford University",
+            )
+            country = st.text_input("Country", placeholder="US")
+            program_name = st.text_input(
+                "Program name",
+                placeholder="MS Computer Science",
+            )
+            degree_type = st.selectbox("Degree type", DEGREE_TYPES, index=0)
+        with right:
+            st.markdown(
+                """
+                The app automatically discovers and ranks official source pages for:
 
-        with single_tab:
-            left, right = st.columns([0.9, 1.1])
-            with left:
-                university_name = st.text_input(
-                    "University name",
-                    placeholder="Stanford University",
-                )
-                country = st.text_input("Country", placeholder="US")
-                program_name = st.text_input(
-                    "Program name",
-                    placeholder="MS Computer Science",
-                )
-                degree_type = st.selectbox("Degree type", DEGREE_TYPES, index=0)
-            with right:
-                st.markdown(
-                    """
-                    The app will automatically discover and rank official source pages for:
-
-                    - program page
-                    - admissions requirements
-                    - English requirements
-                    - application fee
-                    """
-                )
-
-            action_a, action_b = st.columns([0.6, 0.4])
-            with action_a:
-                if st.button("Run workflow", type="primary", use_container_width=True):
-                    try:
-                        target = build_target_from_form(
-                            university_name,
-                            country,
-                            program_name,
-                            degree_type,
-                        )
-                        run_and_store_results([target])
-                    except ValidationError as exc:
-                        st.error(exc)
-                    except Exception as exc:
-                        st.exception(exc)
-            with action_b:
-                if st.button("Append to batch editor", use_container_width=True):
-                    try:
-                        target = build_target_from_form(
-                            university_name,
-                            country,
-                            program_name,
-                            degree_type,
-                        )
-                        current_targets = parse_targets_json(st.session_state["batch_json"])
-                        current_targets.append(target)
-                        st.session_state["batch_json"] = serialize_targets(current_targets)
-                        st.success("Target appended to batch editor.")
-                    except ValidationError as exc:
-                        st.error(exc)
-                    except Exception as exc:
-                        st.exception(exc)
-
-        with batch_tab:
-            st.session_state["batch_json"] = st.text_area(
-                "Targets JSON",
-                value=st.session_state["batch_json"],
-                height=420,
+                - program page
+                - admissions requirements
+                - English requirements
+                - application fee
+                """
             )
 
-            button_a, button_b, button_c = st.columns(3)
-            with button_a:
-                if st.button("Validate batch", use_container_width=True):
-                    try:
-                        targets = parse_targets_json(st.session_state["batch_json"])
-                        st.success(f"Validated {len(targets)} target(s).")
-                    except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-                        st.error(exc)
-            with button_b:
-                if st.button("Save input file", use_container_width=True):
-                    try:
-                        targets = parse_targets_json(st.session_state["batch_json"])
-                        DEFAULT_INPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-                        DEFAULT_INPUT_FILE.write_text(
-                            serialize_targets(targets),
-                            encoding="utf-8",
-                        )
-                        st.success(f"Saved {len(targets)} target(s) to {DEFAULT_INPUT_FILE}.")
-                    except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-                        st.error(exc)
-            with button_c:
-                if st.button("Run batch", type="primary", use_container_width=True):
-                    try:
-                        targets = parse_targets_json(st.session_state["batch_json"])
-                        run_and_store_results(targets)
-                    except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-                        st.error(exc)
-                    except Exception as exc:
-                        st.exception(exc)
+        if st.button("Run workflow", type="primary", use_container_width=True):
+            try:
+                target = build_target_from_form(
+                    university_name,
+                    country,
+                    program_name,
+                    degree_type,
+                )
+                run_and_store_results([target])
+            except ValidationError as exc:
+                st.error(exc)
+            except Exception as exc:
+                st.exception(exc)
 
     with review_tab:
         results = st.session_state["results"]
