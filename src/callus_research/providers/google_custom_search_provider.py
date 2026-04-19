@@ -1,7 +1,8 @@
 import httpx
 
 from callus_research.config import settings
-from callus_research.models.source_bundle import ResearchIntent, SourceType
+from callus_research.models.source_bundle import ResearchIntent
+from callus_research.models.source_common import SourceType
 from callus_research.models.source_discovery import DiscoveredSourceCandidate
 from callus_research.providers.discovery_base import BaseDiscoveryProvider
 

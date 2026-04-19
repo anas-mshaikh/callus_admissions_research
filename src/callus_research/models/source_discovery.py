@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from callus_research.models.source_bundle import SourcePage, SourceType
+from callus_research.models.source_common import SourcePage, SourceType
 
 
 class DiscoveredSourceCandidate(BaseModel):

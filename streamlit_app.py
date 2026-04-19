@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import json
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -10,19 +12,33 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import streamlit as st
+import httpx
 from pydantic import ValidationError
 
 from callus_research.config import settings
+from callus_research.models.api_requests import RuntimeOptions
 from callus_research.models.research_result import TargetResearchResult
-from callus_research.models.source_bundle import ResearchIntent
-from callus_research.services.batch_runner import (
-    export_results_bundle,
-    run_targets_sync,
+from callus_research.models.source_bundle import (
+    ResearchIntent,
+    ResearchTarget,
+    SourcePage,
 )
 
 DEGREE_TYPES = ["Master's", "PhD", "Bachelor's", "MPhil", "Other"]
+SOURCE_TYPES = [
+    "program_page",
+    "application_checklist",
+    "deadline_page",
+    "english_requirements_page",
+    "fee_page",
+    "admissions_page",
+    "other",
+]
+FETCH_MODES = ["auto", "http", "browser"]
 LLM_PROVIDERS = ["openai", "gemini", "hf_inference"]
+MANUAL_DISCOVERY_PROVIDER = "manual"
 DISCOVERY_PROVIDERS = [
+    MANUAL_DISCOVERY_PROVIDER,
     "adk_google_search",
     "google_custom_search",
     "vertex_ai_search",
@@ -30,36 +46,72 @@ DISCOVERY_PROVIDERS = [
 
 
 def apply_runtime_settings() -> None:
-    settings.llm_provider = st.session_state["ui_llm_provider"]
-    settings.llm_model = st.session_state["ui_llm_model"].strip()
-    settings.discovery_provider = st.session_state["ui_discovery_provider"]
-    settings.discovery_model = st.session_state["ui_discovery_model"].strip()
-    google_search_api_key = st.session_state["ui_google_search_api_key"].strip()
-    google_search_engine_id = st.session_state["ui_google_search_engine_id"].strip()
-    vertex_search_project_id = st.session_state["ui_vertex_search_project_id"].strip()
-    vertex_search_location = st.session_state["ui_vertex_search_location"].strip()
-    vertex_search_data_store_id = st.session_state["ui_vertex_search_data_store_id"].strip()
-    vertex_search_serving_config_id = st.session_state[
-        "ui_vertex_search_serving_config_id"
-    ].strip()
-    vertex_search_credentials_path = st.session_state[
-        "ui_vertex_search_credentials_path"
-    ].strip()
-    hf_token = st.session_state["ui_hf_token"].strip()
-    settings.hf_model_id = settings.llm_model or None
-    settings.hf_token = hf_token or None
-    settings.google_search_api_key = google_search_api_key or None
-    settings.google_search_engine_id = google_search_engine_id or None
-    settings.vertex_search_project_id = vertex_search_project_id or None
-    settings.vertex_search_location = vertex_search_location or "global"
-    settings.vertex_search_data_store_id = vertex_search_data_store_id or None
-    settings.vertex_search_serving_config_id = (
-        vertex_search_serving_config_id or "default_config"
+    return None
+
+
+def build_runtime_options() -> RuntimeOptions:
+    discovery_provider = st.session_state["ui_discovery_provider"]
+    return RuntimeOptions(
+        llm_provider=st.session_state["ui_llm_provider"],
+        llm_model=st.session_state["ui_llm_model"].strip() or None,
+        discovery_provider=None
+        if discovery_provider == MANUAL_DISCOVERY_PROVIDER
+        else discovery_provider,
+        discovery_model=st.session_state["ui_discovery_model"].strip() or None,
+        hf_token=st.session_state["ui_hf_token"].strip() or None,
+        google_search_api_key=st.session_state["ui_google_search_api_key"].strip()
+        or None,
+        google_search_engine_id=st.session_state["ui_google_search_engine_id"].strip()
+        or None,
+        vertex_search_project_id=st.session_state["ui_vertex_search_project_id"].strip()
+        or None,
+        vertex_search_location=st.session_state["ui_vertex_search_location"].strip()
+        or None,
+        vertex_search_data_store_id=st.session_state["ui_vertex_search_data_store_id"].strip()
+        or None,
+        vertex_search_serving_config_id=st.session_state[
+            "ui_vertex_search_serving_config_id"
+        ].strip()
+        or None,
+        vertex_search_credentials_path=st.session_state[
+            "ui_vertex_search_credentials_path"
+        ].strip()
+        or None,
     )
-    settings.vertex_search_credentials_path = vertex_search_credentials_path or None
 
 
-def build_target_from_form(
+def csv_text(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    import csv
+
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def build_export_payloads(results: list[TargetResearchResult]) -> dict[str, str]:
+    return {
+        "target_results": json.dumps(
+            [result.model_dump(mode="json") for result in results], indent=2
+        ),
+        "final_records": json.dumps(
+            [result.final_record.model_dump(mode="json") for result in results], indent=2
+        ),
+        "comparison_csv": csv_text(final_comparison_rows(results)),
+        "source_discovery": json.dumps(source_discovery_rows(results), indent=2),
+        "ai_vs_verified": csv_text(ai_vs_verified_rows(results)),
+        "correction_log": csv_text(correction_rows(results)),
+    }
+
+
+def backend_base_url() -> str:
+    return st.session_state["ui_backend_base_url"].rstrip("/")
+
+
+def build_intent_from_form(
     university_name: str,
     country: str,
     program_name: str,
@@ -71,6 +123,73 @@ def build_target_from_form(
             "country": country.strip(),
             "program_name": program_name.strip(),
             "degree_type": degree_type.strip(),
+        }
+    )
+
+
+def parse_manual_source_pages(
+    source_urls_text: str,
+    default_source_type: str,
+    default_fetch_mode: str,
+) -> list[SourcePage]:
+    source_pages: list[SourcePage] = []
+    for line_number, raw_line in enumerate(source_urls_text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) > 3:
+            raise ValueError(
+                "Manual source lines must use 'url', 'url | source_type', "
+                "or 'url | source_type | mode'. "
+                f"Problem on line {line_number}."
+            )
+
+        url = parts[0]
+        source_type = parts[1] if len(parts) >= 2 and parts[1] else default_source_type
+        fetch_mode = parts[2] if len(parts) == 3 and parts[2] else default_fetch_mode
+        try:
+            source_pages.append(
+                SourcePage.model_validate(
+                    {
+                        "url": url,
+                        "source_type": source_type,
+                        "mode": fetch_mode,
+                    }
+                )
+            )
+        except ValidationError as exc:
+            raise ValueError(
+                f"Invalid manual source on line {line_number}: {exc}"
+            ) from exc
+
+    if not source_pages:
+        raise ValueError("Enter at least one manual source URL.")
+    return source_pages
+
+
+def build_manual_target_from_form(
+    university_name: str,
+    country: str,
+    program_name: str,
+    degree_type: str,
+    source_urls_text: str,
+    default_source_type: str,
+    default_fetch_mode: str,
+) -> ResearchTarget:
+    source_pages = parse_manual_source_pages(
+        source_urls_text,
+        default_source_type,
+        default_fetch_mode,
+    )
+    return ResearchTarget.model_validate(
+        {
+            "university_name": university_name.strip(),
+            "country": country.strip(),
+            "program_name": program_name.strip(),
+            "degree_type": degree_type.strip(),
+            "sources": [page.model_dump(mode="json") for page in source_pages],
         }
     )
 
@@ -251,6 +370,29 @@ def correction_rows(results: list[TargetResearchResult]) -> list[dict[str, Any]]
     return rows
 
 
+def correction_highlight_rows(results: list[TargetResearchResult]) -> list[dict[str, Any]]:
+    highlights: list[dict[str, Any]] = []
+    for row in correction_rows(results):
+        if row["resolved"] or row["final_status"] == "uncertain":
+            highlights.append(
+                {
+                    "university_name": row["university_name"],
+                    "program_name": row["program_name"],
+                    "field_name": row["field_name"],
+                    "initial_status": row["initial_status"],
+                    "final_status": row["final_status"],
+                    "weakness_reason": row["weakness_reason"],
+                    "llm_action": row["llm_action"],
+                    "rationale": row["rationale"],
+                }
+            )
+    return highlights
+
+
+def has_source_discovery(results: list[TargetResearchResult]) -> bool:
+    return any(result.source_discovery for result in results)
+
+
 def summarise_results(results: list[TargetResearchResult]) -> tuple[int, int, int]:
     total_pages = sum(len(result.page_results) for result in results)
     corrected_or_verified = 0
@@ -265,7 +407,7 @@ def summarise_results(results: list[TargetResearchResult]) -> tuple[int, int, in
 
 
 def run_and_store_results(targets: list[Any]) -> None:
-    apply_runtime_settings()
+    runtime = build_runtime_options()
     progress = st.progress(0.0, text="Preparing pipeline run")
     status = st.empty()
     total = max(len(targets), 1)
@@ -279,17 +421,37 @@ def run_and_store_results(targets: list[Any]) -> None:
         suffix = f" | {detail}" if detail else ""
         status.caption(f"{target.program_name} | {target.country}{suffix}")
 
-    results = run_targets_sync(targets, progress_callback=on_progress)
-    export_paths = export_results_bundle(results)
+    results: list[TargetResearchResult] = []
+    client_timeout = max(settings.default_timeout, 120.0)
+    with httpx.Client(timeout=client_timeout) as client:
+        for index, target in enumerate(targets, start=1):
+            on_progress("run", index, total, target)
+            if isinstance(target, ResearchTarget):
+                endpoint = f"{backend_base_url()}/research/run-target"
+            else:
+                endpoint = f"{backend_base_url()}/research/run"
+            response = client.post(
+                endpoint,
+                json={
+                    "target": target.model_dump(mode="json"),
+                    "runtime": runtime.model_dump(mode="json"),
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            results.append(TargetResearchResult.model_validate(payload["data"]))
+            on_progress("complete", index, total, target)
+
+    export_payloads = build_export_payloads(results)
 
     progress.progress(1.0, text="Run complete")
-    status.caption(f"Saved outputs to {settings.data_dir / 'outputs'}")
+    status.caption(f"Received results from backend at {backend_base_url()}")
 
     st.session_state["results"] = results
-    st.session_state["export_paths"] = export_paths
+    st.session_state["export_payloads"] = export_payloads
 
 
-def render_results(results: list[TargetResearchResult]) -> None:
+def render_results(results: list[TargetResearchResult], export_payloads: dict[str, str]) -> None:
     total_pages, confirmed_fields, uncertain_fields = summarise_results(results)
     metric_a, metric_b, metric_c = st.columns(3)
     metric_a.metric("Targets", len(results))
@@ -298,26 +460,29 @@ def render_results(results: list[TargetResearchResult]) -> None:
     if uncertain_fields:
         st.warning(f"{uncertain_fields} final fields are still marked uncertain.")
 
-    workflow_tab, discovery_tab, comparison_tab, ai_tab, corrections_tab, scale_tab = (
-        st.tabs(
-            [
-                "Workflow",
-                "Source Discovery",
-                "Final Comparison",
-                "AI vs Verified",
-                "Corrections",
-                "Scaling Note",
-            ]
-        )
+    final_tab, evidence_tab, exports_tab = st.tabs(
+        [
+            "Final Results",
+            "Sources & Evidence",
+            "Exports",
+        ]
     )
 
-    with workflow_tab:
-        st.markdown(
-            """
-            Input intent -> ADK Google Search discovery -> official URL selection -> fetch ->
-            extract -> verify -> targeted LLM adjudication -> merge -> export
-            """
-        )
+    with final_tab:
+        st.markdown("Verified admissions results with validation and exception highlights.")
+        st.dataframe(final_comparison_rows(results), width="stretch")
+        with st.expander("Validation"):
+            st.dataframe(ai_vs_verified_rows(results), width="stretch")
+        highlight_rows = correction_highlight_rows(results)
+        if highlight_rows:
+            st.subheader("Correction Highlights")
+            st.dataframe(highlight_rows, width="stretch")
+        elif uncertain_fields:
+            st.info("No corrected fields were produced. Remaining weak fields stayed unresolved.")
+        else:
+            st.caption("No correction highlights were needed for this run.")
+
+    with evidence_tab:
         for result in results:
             with st.container(border=True):
                 st.subheader(f"{result.university_name} | {result.program_name}")
@@ -325,7 +490,17 @@ def render_results(results: list[TargetResearchResult]) -> None:
                     f"{result.country} | {result.degree_type or 'Degree unspecified'} | "
                     f"{len(result.page_results)} source pages"
                 )
-                st.dataframe(record_to_rows(result.final_record), use_container_width=True)
+                st.dataframe(record_to_rows(result.final_record), width="stretch")
+                if result.source_discovery:
+                    with st.expander("Source discovery"):
+                        discovery_rows = [
+                            row
+                            for row in source_discovery_rows(results)
+                            if row["university_name"] == result.university_name
+                            and row["program_name"] == result.program_name
+                            and row["degree_type"] == result.degree_type
+                        ]
+                        st.dataframe(discovery_rows, width="stretch")
                 for page_index, page_result in enumerate(result.page_results, start=1):
                     with st.expander(
                         f"Source {page_index}: {page_result.source_type} | {page_result.fetch_mode}"
@@ -342,53 +517,96 @@ def render_results(results: list[TargetResearchResult]) -> None:
                         with page_tabs[0]:
                             st.dataframe(
                                 record_to_rows(page_result.verified),
-                                use_container_width=True,
+                                width="stretch",
                             )
                         with page_tabs[1]:
                             st.dataframe(
                                 record_to_rows(page_result.extracted),
-                                use_container_width=True,
+                                width="stretch",
                             )
                         with page_tabs[2]:
                             if page_result.field_escalations:
                                 st.dataframe(
                                     escalation_to_rows(page_result.field_escalations),
-                                    use_container_width=True,
+                                    width="stretch",
                                 )
                             else:
-                                st.caption("No adjudication was needed for this source page.")
+                                st.caption(
+                                    "No adjudication was needed for this source page."
+                                )
+        if not has_source_discovery(results):
+            st.caption("Source discovery is hidden for manual runs unless discovery data exists.")
 
-    with discovery_tab:
-        rows = source_discovery_rows(results)
-        if rows:
-            st.dataframe(rows, use_container_width=True)
-        else:
-            st.info("No source discovery trace was captured for these results.")
+    with exports_tab:
+        export_columns = st.columns(3)
+        target_results_json = export_payloads.get("target_results")
+        final_records_json = export_payloads.get("final_records")
+        comparison_csv_text = export_payloads.get("comparison_csv")
+        ai_vs_verified_csv = export_payloads.get("ai_vs_verified")
+        correction_log_csv = export_payloads.get("correction_log")
+        source_discovery_json = export_payloads.get("source_discovery")
+        if target_results_json:
+            export_columns[0].download_button(
+                "Download target results JSON",
+                data=target_results_json,
+                file_name="target_results.json",
+                mime="application/json",
+                width="stretch",
+            )
+        if final_records_json:
+            export_columns[1].download_button(
+                "Download final records JSON",
+                data=final_records_json,
+                file_name="final_records.json",
+                mime="application/json",
+                width="stretch",
+            )
+        if comparison_csv_text:
+            export_columns[2].download_button(
+                "Download comparison CSV",
+                data=comparison_csv_text,
+                file_name="comparison_table.csv",
+                mime="text/csv",
+                width="stretch",
+            )
 
-    with comparison_tab:
-        st.dataframe(final_comparison_rows(results), use_container_width=True)
+        extra_export_columns = st.columns(3)
+        if source_discovery_json and has_source_discovery(results):
+            extra_export_columns[0].download_button(
+                "Download source discovery JSON",
+                data=source_discovery_json,
+                file_name="source_discovery.json",
+                mime="application/json",
+                width="stretch",
+            )
+        if ai_vs_verified_csv:
+            extra_export_columns[1].download_button(
+                "Download AI vs verified CSV",
+                data=ai_vs_verified_csv,
+                file_name="ai_vs_verified.csv",
+                mime="text/csv",
+                width="stretch",
+            )
+        if correction_log_csv:
+            extra_export_columns[2].download_button(
+                "Download correction log CSV",
+                data=correction_log_csv,
+                file_name="correction_log.csv",
+                mime="text/csv",
+                width="stretch",
+            )
 
-    with ai_tab:
-        st.dataframe(ai_vs_verified_rows(results), use_container_width=True)
+        st.caption("Input intent or manual URLs -> optional discovery -> fetch -> extract -> verify -> adjudicate -> merge")
+        with st.expander("Workflow notes"):
+            st.markdown(
+                """
+                This workflow is structured as a reusable research operator pipeline:
 
-    with corrections_tab:
-        rows = correction_rows(results)
-        if rows:
-            st.dataframe(rows, use_container_width=True)
-        else:
-            st.info("No correction cases were logged for these results.")
-
-    with scale_tab:
-        st.markdown(
-            """
-            This workflow is structured as a reusable research operator pipeline:
-
-            - discovery is isolated behind a provider boundary
-            - official pages are stored and used as source of truth
-            - weak fields are adjudicated instead of silently accepted
-            - exports capture discovery, comparison, and correction artifacts for reuse
-            """
-        )
+                - official pages remain the source of truth
+                - weak fields are adjudicated instead of silently accepted
+                - exports preserve evidence, comparison, and correction artifacts
+                """
+            )
 
 
 def init_page() -> None:
@@ -427,8 +645,10 @@ def main() -> None:
 
     if "results" not in st.session_state:
         st.session_state["results"] = []
-    if "export_paths" not in st.session_state:
-        st.session_state["export_paths"] = {}
+    if "export_payloads" not in st.session_state:
+        st.session_state["export_payloads"] = {}
+    if "ui_backend_base_url" not in st.session_state:
+        st.session_state["ui_backend_base_url"] = "http://127.0.0.1:8000"
     if "ui_llm_provider" not in st.session_state:
         st.session_state["ui_llm_provider"] = settings.llm_provider
     if "ui_llm_model" not in st.session_state:
@@ -465,6 +685,12 @@ def main() -> None:
         st.session_state["ui_vertex_search_credentials_path"] = (
             settings.vertex_search_credentials_path or ""
         )
+    if "ui_manual_source_urls" not in st.session_state:
+        st.session_state["ui_manual_source_urls"] = ""
+    if "ui_manual_source_type" not in st.session_state:
+        st.session_state["ui_manual_source_type"] = "program_page"
+    if "ui_manual_fetch_mode" not in st.session_state:
+        st.session_state["ui_manual_fetch_mode"] = "auto"
 
     st.title("Callus Admissions Research")
     st.caption(
@@ -473,6 +699,11 @@ def main() -> None:
 
     with st.sidebar:
         st.subheader("Runtime")
+        st.text_input(
+            "Backend API URL",
+            key="ui_backend_base_url",
+            help="FastAPI base URL used by the Streamlit frontend.",
+        )
         st.selectbox(
             "LLM provider",
             options=LLM_PROVIDERS,
@@ -495,7 +726,9 @@ def main() -> None:
             options=DISCOVERY_PROVIDERS,
             key="ui_discovery_provider",
         )
-        if st.session_state["ui_discovery_provider"] == "adk_google_search":
+        if st.session_state["ui_discovery_provider"] == MANUAL_DISCOVERY_PROVIDER:
+            st.caption("Manual mode bypasses discovery and uses your URLs directly.")
+        elif st.session_state["ui_discovery_provider"] == "adk_google_search":
             st.text_input(
                 "Discovery model",
                 key="ui_discovery_model",
@@ -539,14 +772,13 @@ def main() -> None:
                 key="ui_vertex_search_credentials_path",
                 help="Optional local path. Leave blank to use ADC credentials.",
             )
-        apply_runtime_settings()
-        st.caption("Runtime settings apply to the next workflow run.")
+        st.caption("Runtime settings are sent to the backend for the next workflow run.")
 
     input_tab, review_tab = st.tabs(["Configure & Run", "Results"])
 
     with input_tab:
         st.markdown(
-            "Run a single research workflow from a program-specific intent."
+            "Run a single research workflow from either discovery or manual URLs."
         )
         left, right = st.columns([0.9, 1.1])
         with left:
@@ -561,28 +793,86 @@ def main() -> None:
             )
             degree_type = st.selectbox("Degree type", DEGREE_TYPES, index=0)
         with right:
-            st.markdown(
-                """
-                The app automatically discovers and ranks official source pages for:
+            if st.session_state["ui_discovery_provider"] != MANUAL_DISCOVERY_PROVIDER:
+                st.markdown(
+                    """
+                    The app automatically discovers and ranks official source pages for:
 
-                - program page
-                - admissions requirements
-                - English requirements
-                - application fee
-                """
+                    - program page
+                    - admissions requirements
+                    - English requirements
+                    - application fee
+                    """
+                )
+            else:
+                st.markdown(
+                    """
+                    Manual mode bypasses discovery and sends your URLs straight into the
+                    fetch, extract, verify, and adjudication pipeline.
+
+                    Use one URL per line, or:
+
+                    - `url | source_type`
+                    - `url | source_type | mode`
+                    """
+                )
+                st.selectbox(
+                    "Default source type",
+                    options=SOURCE_TYPES,
+                    key="ui_manual_source_type",
+                    help="Applied to manual lines that do not include a source type.",
+                )
+                st.selectbox(
+                    "Default fetch mode",
+                    options=FETCH_MODES,
+                    key="ui_manual_fetch_mode",
+                    help="Applied to manual lines that do not include a fetch mode.",
+                )
+
+        if st.session_state["ui_discovery_provider"] == MANUAL_DISCOVERY_PROVIDER:
+            st.text_area(
+                "Manual source URLs",
+                key="ui_manual_source_urls",
+                height=180,
+                placeholder=(
+                    "https://cs.stanford.edu/admissions/masters\n"
+                    "https://gradadmissions.stanford.edu/applying/fees | fee_page\n"
+                    "https://gradadmissions.stanford.edu/applying/international | "
+                    "english_requirements_page | browser"
+                ),
+                help=(
+                    "Manual fallback for cases where discovery is blocked by provider "
+                    "quota, credentials, or ranking misses."
+                ),
             )
 
-        if st.button("Run workflow", type="primary", use_container_width=True):
+        if st.button("Run workflow", type="primary", width="stretch"):
             try:
-                target = build_target_from_form(
-                    university_name,
-                    country,
-                    program_name,
-                    degree_type,
-                )
+                if (
+                    st.session_state["ui_discovery_provider"]
+                    != MANUAL_DISCOVERY_PROVIDER
+                ):
+                    target = build_intent_from_form(
+                        university_name,
+                        country,
+                        program_name,
+                        degree_type,
+                    )
+                else:
+                    target = build_manual_target_from_form(
+                        university_name,
+                        country,
+                        program_name,
+                        degree_type,
+                        st.session_state["ui_manual_source_urls"],
+                        st.session_state["ui_manual_source_type"],
+                        st.session_state["ui_manual_fetch_mode"],
+                    )
                 run_and_store_results([target])
             except ValidationError as exc:
                 st.error(exc)
+            except ValueError as exc:
+                st.error(str(exc))
             except Exception as exc:
                 st.exception(exc)
 
@@ -591,66 +881,8 @@ def main() -> None:
         if not results:
             st.info("No run results yet. Start from Configure & Run.")
         else:
-            export_paths = st.session_state["export_paths"]
-            export_columns = st.columns(3)
-            target_results_path = export_paths.get("target_results")
-            final_records_path = export_paths.get("final_records")
-            comparison_csv_path = export_paths.get("comparison_csv")
-            ai_vs_verified_path = export_paths.get("ai_vs_verified")
-            correction_log_path = export_paths.get("correction_log")
-            source_discovery_path = export_paths.get("source_discovery")
-            if target_results_path:
-                export_columns[0].download_button(
-                    "Download target results JSON",
-                    data=Path(target_results_path).read_text(encoding="utf-8"),
-                    file_name=Path(target_results_path).name,
-                    mime="application/json",
-                    use_container_width=True,
-                )
-            if final_records_path:
-                export_columns[1].download_button(
-                    "Download final records JSON",
-                    data=Path(final_records_path).read_text(encoding="utf-8"),
-                    file_name=Path(final_records_path).name,
-                    mime="application/json",
-                    use_container_width=True,
-                )
-            if comparison_csv_path:
-                export_columns[2].download_button(
-                    "Download comparison CSV",
-                    data=Path(comparison_csv_path).read_text(encoding="utf-8"),
-                    file_name=Path(comparison_csv_path).name,
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-
-            extra_export_columns = st.columns(3)
-            if source_discovery_path:
-                extra_export_columns[0].download_button(
-                    "Download source discovery JSON",
-                    data=Path(source_discovery_path).read_text(encoding="utf-8"),
-                    file_name=Path(source_discovery_path).name,
-                    mime="application/json",
-                    use_container_width=True,
-                )
-            if ai_vs_verified_path:
-                extra_export_columns[1].download_button(
-                    "Download AI vs verified CSV",
-                    data=Path(ai_vs_verified_path).read_text(encoding="utf-8"),
-                    file_name=Path(ai_vs_verified_path).name,
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-            if correction_log_path:
-                extra_export_columns[2].download_button(
-                    "Download correction log CSV",
-                    data=Path(correction_log_path).read_text(encoding="utf-8"),
-                    file_name=Path(correction_log_path).name,
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-
-            render_results(results)
+            export_payloads = st.session_state["export_payloads"]
+            render_results(results, export_payloads)
 
 
 if __name__ == "__main__":

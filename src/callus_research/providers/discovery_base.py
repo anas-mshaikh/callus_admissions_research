@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
-from callus_research.models.source_bundle import ResearchIntent, SourceType
+from callus_research.models.source_bundle import ResearchIntent
+from callus_research.models.source_common import SourceType
 from callus_research.models.source_discovery import DiscoveredSourceCandidate
 
 

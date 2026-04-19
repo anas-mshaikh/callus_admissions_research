@@ -1,5 +1,6 @@
 import asyncio
 
+from callus_research.logging_utils import configure_logging
 from callus_research.services.batch_runner import (
     export_results_bundle,
     load_targets,
@@ -8,6 +9,7 @@ from callus_research.services.batch_runner import (
 
 
 async def main():
+    configure_logging()
     targets = load_targets()
     results = await run_targets(
         targets,

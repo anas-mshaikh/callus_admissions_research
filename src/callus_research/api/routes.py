@@ -1,5 +1,11 @@
 from fastapi import APIRouter, HTTPException
 
+from callus_research.config import settings
+from callus_research.models.api_requests import (
+    ResearchRunIntentRequest,
+    ResearchRunTargetRequest,
+    RuntimeOptions,
+)
 from callus_research.models.extract_request import ExtractFromHtmlRequest
 from callus_research.models.fetch import FetchRequest
 from callus_research.models.source_bundle import ResearchIntent
@@ -15,6 +21,40 @@ from callus_research.services.source_fetcher import fetch_source
 from callus_research.services.verify_fields import verify_extraction
 
 router = APIRouter()
+
+
+def apply_runtime_options(runtime: RuntimeOptions | None) -> None:
+    if not runtime:
+        return
+    if runtime.llm_provider is not None:
+        settings.llm_provider = runtime.llm_provider
+    if runtime.llm_model is not None:
+        settings.llm_model = runtime.llm_model
+        settings.hf_model_id = runtime.llm_model or None
+    if runtime.discovery_provider is not None:
+        settings.discovery_provider = runtime.discovery_provider
+    if runtime.discovery_model is not None:
+        settings.discovery_model = runtime.discovery_model
+    if runtime.hf_token is not None:
+        settings.hf_token = runtime.hf_token or None
+    if runtime.google_search_api_key is not None:
+        settings.google_search_api_key = runtime.google_search_api_key or None
+    if runtime.google_search_engine_id is not None:
+        settings.google_search_engine_id = runtime.google_search_engine_id or None
+    if runtime.vertex_search_project_id is not None:
+        settings.vertex_search_project_id = runtime.vertex_search_project_id or None
+    if runtime.vertex_search_location is not None:
+        settings.vertex_search_location = runtime.vertex_search_location or "global"
+    if runtime.vertex_search_data_store_id is not None:
+        settings.vertex_search_data_store_id = runtime.vertex_search_data_store_id or None
+    if runtime.vertex_search_serving_config_id is not None:
+        settings.vertex_search_serving_config_id = (
+            runtime.vertex_search_serving_config_id or "default_config"
+        )
+    if runtime.vertex_search_credentials_path is not None:
+        settings.vertex_search_credentials_path = (
+            runtime.vertex_search_credentials_path or None
+        )
 
 
 @router.get("/health")
@@ -47,9 +87,20 @@ async def discover_sources_route(intent: ResearchIntent):
 
 
 @router.post("/research/run")
-async def research_run_route(intent: ResearchIntent):
+async def research_run_route(payload: ResearchRunIntentRequest):
     try:
-        result = await process_research_input(intent)
+        apply_runtime_options(payload.runtime)
+        result = await process_research_input(payload.target)
+        return {"ok": True, "data": result.model_dump(mode="json")}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/research/run-target")
+async def research_run_target_route(payload: ResearchRunTargetRequest):
+    try:
+        apply_runtime_options(payload.runtime)
+        result = await process_research_input(payload.target)
         return {"ok": True, "data": result.model_dump()}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

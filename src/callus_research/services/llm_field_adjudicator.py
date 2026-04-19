@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from callus_research.config import settings
+from callus_research.logging_utils import get_logger
 from callus_research.models.extract_request import ExtractFromHtmlRequest
 from callus_research.models.extraction import FieldEvidence
 from callus_research.models.llm_adjudication import (
@@ -29,6 +31,21 @@ FIELD_ORDER: list[FieldName] = [
     "application_fee",
     "notable_requirement",
 ]
+logger = get_logger(__name__)
+
+
+def format_adjudication_error(exc: Exception) -> str:
+    provider = settings.llm_provider or "unknown"
+    model = settings.llm_model or settings.hf_model_id or "unspecified"
+    if isinstance(exc, StopIteration):
+        detail = "provider returned an empty or malformed structured response"
+    else:
+        detail = f"{type(exc).__name__}: {exc}"
+    return (
+        f"LLM adjudication failed for provider={provider}, model={model}. "
+        f"{detail}. Verified field was kept."
+    )
+
 
 FIELD_HINTS: dict[FieldName, dict[str, list[str]]] = {
     "application_deadline": {
@@ -216,12 +233,47 @@ def adjudicate_weak_fields(
         return record, []
 
     provider = get_extraction_provider()
+    logger.info(
+        "Escalating %s weak field(s): university=%s program=%s source_url=%s provider=%s",
+        len(weak_signals),
+        request.university_name,
+        request.program_name,
+        request.source_url,
+        provider.__class__.__name__,
+    )
     merged_record = record.model_copy(deep=True)
     escalations: list[FieldEscalationResult] = []
 
     for signal in weak_signals:
         original_field = getattr(merged_record, signal.field_name)
-        adjudication = provider.adjudicate_field(request, signal)
+        try:
+            adjudication = provider.adjudicate_field(request, signal)
+        except Exception as exc:
+            logger.warning(
+                "Adjudication failed: university=%s program=%s field=%s url=%s error=%s",
+                request.university_name,
+                request.program_name,
+                signal.field_name,
+                signal.source_url,
+                format_adjudication_error(exc),
+            )
+            adjudication = LLMAdjudicationResult(
+                field_name=signal.field_name,
+                recommended_action="unresolved",
+                value=original_field.value,
+                confidence=0.0,
+                rationale=format_adjudication_error(exc),
+                citation_type="none",
+                citation=None,
+                evidence_text=original_field.evidence_text,
+            )
+        else:
+            logger.info(
+                "Adjudication completed: field=%s action=%s confidence=%.2f",
+                signal.field_name,
+                adjudication.recommended_action,
+                adjudication.confidence,
+            )
         merged_field, resolved = merge_adjudicated_field(
             original_field,
             adjudication,

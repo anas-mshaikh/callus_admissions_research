@@ -2,17 +2,16 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from callus_research.models.source_bundle import (
-    ResearchIntent,
-    ResearchTarget,
-    SourcePage,
-    SourceType,
-)
+from callus_research.logging_utils import get_logger
+from callus_research.models.source_bundle import ResearchIntent, ResearchTarget
+from callus_research.models.source_common import SourcePage, SourceType
 from callus_research.models.source_discovery import (
     DiscoveredSourceCandidate,
     SourceDiscoveryResult,
 )
 from callus_research.providers.discovery_factory import get_discovery_provider
+
+logger = get_logger(__name__)
 
 
 DISCOVERY_QUERIES: dict[SourceType, str] = {
@@ -153,6 +152,12 @@ def dedupe_selected_sources(
 
 async def discover_sources(intent: ResearchIntent) -> SourceDiscoveryResult:
     provider = get_discovery_provider()
+    logger.info(
+        "Running discovery with provider=%s for university=%s program=%s",
+        provider.__class__.__name__,
+        intent.university_name,
+        intent.program_name,
+    )
     search_queries = [
         DISCOVERY_QUERIES[source_type].format(
             university_name=intent.university_name,
@@ -164,13 +169,26 @@ async def discover_sources(intent: ResearchIntent) -> SourceDiscoveryResult:
 
     candidates: list[DiscoveredSourceCandidate] = []
     for source_type, query in zip(PRIORITY_SOURCE_TYPES, search_queries):
+        logger.info("Discovery query: source_type=%s query=%s", source_type, query)
         try:
             results = await provider.discover_candidates(intent, source_type, query)
         except Exception as exc:
+            logger.exception(
+                "Discovery provider failed: university=%s program=%s source_type=%s",
+                intent.university_name,
+                intent.program_name,
+                source_type,
+            )
             raise ValueError(
                 f"Source discovery failed for {source_type} using query '{query}'. {exc}"
             ) from exc
         if not results:
+            logger.warning(
+                "Discovery returned no candidates: university=%s program=%s source_type=%s",
+                intent.university_name,
+                intent.program_name,
+                source_type,
+            )
             continue
 
         ranked = sorted(
@@ -189,11 +207,23 @@ async def discover_sources(intent: ResearchIntent) -> SourceDiscoveryResult:
                     else "not an official university domain"
                 )
             candidates.append(candidate)
+        logger.info(
+            "Discovery ranked %s candidate(s) for source_type=%s",
+            len(ranked),
+            source_type,
+        )
 
     selected_sources = dedupe_selected_sources(candidates)
     summary = (
         f"Selected {len(selected_sources)} official source page(s) from "
         f"{len(candidates)} discovered candidate(s)."
+    )
+    logger.info(
+        "Discovery summary: university=%s program=%s selected=%s candidates=%s",
+        intent.university_name,
+        intent.program_name,
+        len(selected_sources),
+        len(candidates),
     )
 
     return SourceDiscoveryResult(
