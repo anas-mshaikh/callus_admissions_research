@@ -1,4 +1,3 @@
-
 # Callus Company Inc. Competency Assessment
 
 ## AI Researcher Submission
@@ -24,9 +23,89 @@ This submission is intentionally designed to match the Callus assessment brief: 
 
 ---
 
-## What This Project Demonstrates
 
-This submission is designed to show five things a judge would reasonably care about:
+
+## Why This Workflow Is Scalable
+
+This project is intentionally small for the assessment, but the design is meant to scale beyond four universities.
+
+### 1. Modular stages
+
+Discovery, extraction, verification, adjudication, and export are separated cleanly. This makes the workflow easier to extend to new institutions, new countries, or new research domains.
+
+### 2. Structured outputs
+
+Because the system emits machine-readable artifacts, the workflow can support:
+
+* larger university sets
+* repeated monitoring
+* audit trails
+* downstream reporting systems
+* future AI agents built on top of prior verified data
+
+### 3. Cost-effective repeated usage
+
+A practical scaling improvement is to persist verified results after the expensive work is complete.
+
+A production version of this system can:
+
+* **store verified final records in a database** for fast lookups,
+* **cache recent runs** for short-term reruns,
+* **avoid repeating expensive search + extraction + adjudication** for unchanged targets,
+* and  **refresh data only when a record expires or a source changes** .
+
+That means the costly workflow runs once, the verified record is stored, and later requests can be served quickly and cheaply until the data reaches its refresh window.
+
+This improves:
+
+* **speed** for repeated research requests,
+* **cost efficiency** by reducing unnecessary LLM and fetch operations,
+* and **operational scalability** when the number of university targets grows.
+
+A simple lifecycle would be:
+
+**discover once → verify once → store in DB → serve from cache/DB → refresh on expiry**
+
+This is a much better long-term model than re-running full web research every time.
+
+### Better support for Callus-style research operations
+
+The same architecture could support future workflows such as:
+
+* global opportunity research
+* scholarship discovery
+* talent-support guidance
+* role-specific AI research operators
+* verified knowledge layers for higher-volume admissions workflows
+
+---
+
+## Running the Project
+
+### 1. Start the backend
+
+```bash
+uv run uvicorn callus_research.main:app --app-dir src --reload
+```
+
+Default backend URL:
+`http://127.0.0.1:8000`
+
+### 2. Start the frontend
+
+```bash
+uv run streamlit run streamlit_app.py
+```
+
+### 3. Optional CLI batch run
+
+```bash
+uv run python src/scripts/run_pipeline.py
+```
+
+---
+
+## Submission is designed to show five things:
 
 1. **Workflow design**
    A clear research pipeline with distinct stages for discovery, extraction, verification, adjudication, and reporting.
@@ -73,8 +152,6 @@ The workflow uses at least two distinct tools with different responsibilities:
 * **Streamlit frontend**
   * operator-facing review and export UI
 
-This is intentional. Instead of using two agents to do the same task, each layer serves a different purpose.
-
 ### 3. Required admissions fields
 
 The workflow extracts the four fields requested in the assignment:
@@ -103,31 +180,7 @@ The workflow records weak or ambiguous fields and preserves them in reviewable o
 * `correction_log.csv`
 * `source_discovery.json`
 
-These artifacts are designed to support the assignment requirement to identify cases where AI output was incomplete, ambiguous, or potentially incorrect, then correct those cases using official university sources.
-
----
-
-## Source-of-Truth Policy
-
-A core design decision in this project is that  **official university pages are the source of truth** .
-
-Accepted final evidence:
-
-* official program pages
-* official admissions pages
-* official English requirements pages
-* official fee pages
-
-Not accepted as final evidence:
-
-* blogs
-* ranking websites
-* third-party admissions summaries
-* unofficial aggregators
-
-This matters because a strong research workflow should not merely generate plausible answers. It should produce  **traceable answers backed by primary sources** .
-
----
+These artifacts are designed to support the assignment requirement to identify cases where AI output was incomplete, ambiguous, or potentially incorrect, then correct those cases using official university sources.---
 
 ## Workflow Design
 
@@ -159,7 +212,7 @@ In discovery mode, the system generates and ranks likely official pages for:
 * English language requirements
 * fee information
 
-The goal is not to search the whole web broadly. The goal is to locate the **right official university pages** for downstream extraction and verification.
+We designed the system locate the **right official university pages** for downstream extraction and verification.
 
 ---
 
@@ -304,18 +357,6 @@ A simple lifecycle would be:
 
 This is a much better long-term model than re-running full web research every time.
 
-### 4. Better support for Callus-style research operations
-
-The same architecture could support future workflows such as:
-
-* global opportunity research
-* scholarship discovery
-* talent-support guidance
-* role-specific AI research operators
-* verified knowledge layers for higher-volume admissions workflows
-
----
-
 ## Current Project Structure
 
 ### Frontend
@@ -362,28 +403,3 @@ Responsibilities:
 * verification
 * weak-field adjudication
 * final field merge
-
----
-
-## Running the Project
-
-### 1. Start the backend
-
-```bash
-uv run uvicorn callus_research.main:app --app-dir src --reload
-```
-
-Default backend URL:
-`http://127.0.0.1:8000`
-
-### 2. Start the frontend
-
-```bash
-uv run streamlit run streamlit_app.py
-```
-
-### 3. Optional CLI batch run
-
-```bash
-uv run python src/scripts/run_pipeline.py
-```
